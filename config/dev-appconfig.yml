@@ -1,0 +1,15 @@
+aws_project: von
+client_name: von
+tags:
+  APPLICATION: "${APPLICATION}"
+  COST_CENTER: "${COST_CENTER}"
+  ENVIRONMENT: "DEV"
+  Name: ${self:provider.stage}-${self:custom.appconfig.aws_project}
+cognito_admin_create: false
+subnet_ids:
+  - ${aws_subnet_a}
+  - ${aws_subnet_b}
+  - ${aws_subnet_c}
+certificate_arn: "#{aws_acm_arn}"
+certificate_arn_ohio: "${aws_acm_arn_ohio}"
+main_domain: "${domain_name}"

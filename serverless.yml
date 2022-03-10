@@ -1,0 +1,125 @@
+service: ${self:custom.appconfig.aws_project}-sls-service
+provider:
+  name: aws
+  region: us-east-2
+  endpointType: "regional"
+  stage: ${opt:stage, 'dev'}
+# Custom Variables
+custom:
+  appconfig: ${file(config/${self:provider.stage}-appconfig.yml)}
+  userpool_id: ${ssm:/${self:provider.stage}/${self:custom.appconfig.aws_project}/main/infra/userpool/id}
+  appclient_id: ${ssm:/${self:provider.stage}/${self:custom.appconfig.aws_project}/main/infra/appclient/id}
+
+resources:
+  Resources:
+    HttpApi:
+      Type: AWS::ApiGatewayV2::Api
+      Properties:
+        Name: ${self:provider.stage}-${self:custom.appconfig.aws_project}-api
+        ProtocolType: HTTP
+        CorsConfiguration:
+          AllowHeaders:
+            - "*"
+          AllowMethods:
+            - "*"
+          AllowOrigins:
+            - "https://${self:provider.stage}-main.${self:custom.appconfig.main_domain}"
+        Tags:
+          ${self:custom.appconfig.tags}
+
+    HttpApiAuthorizer:
+      Type: AWS::ApiGatewayV2::Authorizer
+      Properties:
+        ApiId: !Ref HttpApi
+        AuthorizerType: JWT
+        IdentitySource:
+          - "$request.header.Authorization"
+        JwtConfiguration:
+          Audience:
+            - ${self:custom.appclient_id}
+          Issuer: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${self:custom.userpool_id}"
+        Name: ${self:provider.stage}-${self:custom.appconfig.aws_project}-cognito-authorizer
+
+    HttpApiStage:
+      Type: AWS::ApiGatewayV2::Stage
+      Properties:
+        ApiId: !Ref HttpApi
+        AutoDeploy: true
+        StageName: ${self:provider.stage}
+        Tags:
+          ${self:custom.appconfig.tags}
+
+    HttpApiIntegration:
+      Type: AWS::ApiGatewayV2::Integration
+      Properties:
+        ApiId: !Ref HttpApi
+        IntegrationMethod: ANY
+        IntegrationType: HTTP_PROXY
+        ConnectionType: VPC_LINK
+        ConnectionId: !Ref VpcLinks
+        IntegrationUri: ${ssm:/${self:provider.stage}/${self:custom.appconfig.aws_project}/main/infra/alb-listener-80/arn}
+        PayloadFormatVersion: "1.0"
+        RequestParameters: {
+          "overwrite:path": "$request.path"
+        }
+
+    HttpApiRoute:
+      Type: AWS::ApiGatewayV2::Route
+      Properties:
+        ApiId: !Ref HttpApi
+        AuthorizationType: JWT
+        AuthorizerId: !Ref HttpApiAuthorizer
+        RouteKey: ANY /{proxy+}
+        Target: !Sub "integrations/${HttpApiIntegration}"
+
+# Block Public Access to API
+    HttpApiRoute4XXInternalWildcard:
+      Type: AWS::ApiGatewayV2::Route
+      Properties:
+        ApiId: !Ref HttpApi
+        RouteKey: ANY /internal/{proxy+}
+    HttpApiRoute4XXAdminInternalWildcard:
+      Type: AWS::ApiGatewayV2::Route
+      Properties:
+        ApiId: !Ref HttpApi
+        RouteKey: ANY /admin/internal/{proxy+}
+    HttpApiRoute4XXInternal:
+      Type: AWS::ApiGatewayV2::Route
+      Properties:
+        ApiId: !Ref HttpApi
+        RouteKey: ANY /internal
+    HttpApiRoute4XXAdminInternal:
+      Type: AWS::ApiGatewayV2::Route
+      Properties:
+        ApiId: !Ref HttpApi
+        RouteKey: ANY /admin/internal
+# End Block Public access
+
+
+    VpcLinks:
+      Type: AWS::ApiGatewayV2::VpcLink
+      Properties:
+        Name: ${self:provider.stage}-${self:custom.appconfig.aws_project}-vpclink
+        SecurityGroupIds:
+          - ${ssm:/${self:provider.stage}/${self:custom.appconfig.aws_project}/main/infra/sg-vpc/id}
+        SubnetIds: ${self:custom.appconfig.subnet_ids}
+        Tags:
+          ${self:custom.appconfig.tags}
+
+    CustomDomainNameV2:
+      Type: AWS::ApiGatewayV2::DomainName
+      Properties:
+        CertificateArn:
+        DomainName: ${self:provider.stage}-main-api.${self:custom.appconfig.main_domain}
+        DomainNameConfigurations:
+        - CertificateArn: ${self:custom.appconfig.certificate_arn_ohio}
+          SecurityPolicy: TLS_1_2
+          EndpointType: REGIONAL
+        Tags: ${self:custom.appconfig.tags}
+
+    DemoApiMapping:
+      Type: AWS::ApiGatewayV2::ApiMapping
+      Properties:
+        DomainName: !Ref CustomDomainNameV2
+        ApiId: !Ref HttpApi
+        Stage: ${self:provider.stage}
